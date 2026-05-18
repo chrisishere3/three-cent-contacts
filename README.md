@@ -138,5 +138,5 @@ PRs and issues welcome. Especially appreciated:
 
 ## Related
 
-- Project page with run log + sample output: [chris-as-is.com/projects/cheap-email-finder.html](https://chris-as-is.com/projects/cheap-email-finder.html?ref=three-cent-contacts)
+- Project page with run log + sample output: [chris-as-is.com/projects/three-cent-contacts.html](https://chris-as-is.com/projects/three-cent-contacts.html?ref=three-cent-contacts)
 - More about the build: [chris-as-is.com](https://chris-as-is.com?ref=three-cent-contacts)

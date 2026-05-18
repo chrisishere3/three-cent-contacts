@@ -106,5 +106,5 @@ Only `verified=true` rows are emitted by default. To include unverified, pass `-
 
 ## Related
 
-- Project page + sample output: [chris-as-is.com/projects/cheap-email-finder.html](https://chris-as-is.com/projects/cheap-email-finder.html?ref=three-cent-contacts)
+- Project page + sample output: [chris-as-is.com/projects/three-cent-contacts.html](https://chris-as-is.com/projects/three-cent-contacts.html?ref=three-cent-contacts)
 - Want this run for you instead of running it yourself? DM [@chris_as_is on X](https://x.com/chris_as_is).
