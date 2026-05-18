@@ -2,7 +2,7 @@
 name: three-cent-contacts
 description: Build a verified-email contact list from a CSV of companies + titles, at roughly $0.03 per verified contact. Runs a cheapest-first waterfall (Perplexity Sonar → site scrape → pattern detect → Hunter pattern → apply pattern → Bouncer verify → Bright Data SERP fallback). Use when the user wants to find work emails for B2B prospecting, build a cold outreach list, enrich a company list with contacts, or replace tools like Apollo, Hunter, or Clay for a one-off list build. Also use when the user mentions "find emails," "contact enrichment," "build a prospect list," "cheap email finder," "lead enrichment waterfall," or "cold email list."
 metadata:
-  version: 0.2.1
+  version: 0.2.2
 ---
 
 # Three Cent Contacts
@@ -53,7 +53,7 @@ For optional keys, don't block; just mention "Note: Hunter/Bright Data not set, 
 
 ## Python dependencies
 
-The skill ships Python code that needs three packages: `httpx`, `python-dotenv`, `click`. On first run, check whether they import. If `python3 -c "import httpx, dotenv, click"` fails, run `python3 -m pip install --user httpx python-dotenv click` once (silently, unless it errors). Then proceed.
+The skill ships Python code that needs two packages: `httpx` and `click`. On first run, check whether they import. If `python3 -c "import httpx, click"` fails, run `python3 -m pip install --user httpx 'click>=8.2.0'` once (silently, unless it errors). Then proceed.
 
 ## Finding the script
 

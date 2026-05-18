@@ -17,7 +17,7 @@ I'll acknowledge your email within 3 business days. If the issue is real, I'll p
 ## What this tool does and does not do with your data
 
 **Stays on your machine:**
-- Your API keys (read from `~/.env`, never logged or sent anywhere except the third-party APIs you've authorized)
+- Your API keys. We read **only** the five keys this skill recognizes from `~/.env` and project-local `.env` — `OPENROUTER_API_KEY`, `BOUNCER_API_KEY` (or legacy `USEBOUNCER_API_KEY`), `HUNTER_API_KEY`, `BRIGHTDATA_SERP_USERNAME`, `BRIGHTDATA_SERP_PASSWORD`. Anything else in your `.env` (HubSpot, AWS, GitHub tokens, whatever) is **not** read into our process. Keys we do read are never logged or sent anywhere except the third-party APIs you've authorized.
 - Your input CSV
 - Your output CSV
 - The pattern cache at `~/.three-cent-contacts/pattern_cache.json`

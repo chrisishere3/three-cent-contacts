@@ -1,6 +1,6 @@
 [project]
 name = "three-cent-contacts"
-version = "0.2.1"
+version = "0.2.2"
 description = "Find verified B2B contacts at ~$0.03 each via a cheapest-first waterfall (Sonar, site scrape, Hunter, Bouncer, Bright Data)."
 authors = [{ name = "Chris Berkley", email = "chris@chris-as-is.com" }]
 license = { text = "MIT" }
@@ -8,7 +8,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "httpx>=0.27",
-  "python-dotenv>=1.0",
   "beautifulsoup4>=4.12",
   "tenacity>=8.2",
   "click>=8.2.0",

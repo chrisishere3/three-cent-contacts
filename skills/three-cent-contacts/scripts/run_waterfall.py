@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import click
-from dotenv import load_dotenv
 
 from email_patterns import (
     detect_pattern,
@@ -111,10 +110,54 @@ def estimate_cost(n_rows: int) -> Tuple[float, float]:
     return (n_rows * TYPICAL_COST_PER_ROW, n_rows * CEILING_COST_PER_ROW)
 
 
+# Only these keys are ever read from the user's .env files. We do not load the
+# rest of ~/.env into the process, so unrelated secrets the user keeps there
+# (HubSpot, AWS, whatever) never end up in our environment.
+SKILL_ENV_KEYS = (
+    "OPENROUTER_API_KEY",
+    "BOUNCER_API_KEY",
+    "USEBOUNCER_API_KEY",  # legacy alias for BOUNCER_API_KEY
+    "HUNTER_API_KEY",
+    "BRIGHTDATA_SERP_USERNAME",
+    "BRIGHTDATA_SERP_PASSWORD",
+)
+
+
+def _scoped_env_read(path: Path) -> Dict[str, str]:
+    """Parse a .env file and return only the keys this skill recognizes."""
+    out: Dict[str, str] = {}
+    if not path.exists():
+        return out
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            if key not in SKILL_ENV_KEYS:
+                continue
+            value = value.strip().strip('"').strip("'")
+            out[key] = value
+    except OSError:
+        return out
+    return out
+
+
 def load_env_files() -> None:
-    """~/.env first, then project-local .env (project wins)."""
-    load_dotenv(Path.home() / ".env")
-    load_dotenv(Path.cwd() / ".env", override=True)
+    """
+    Load only the keys this skill needs from ~/.env then project-local .env
+    (project wins). We do NOT use dotenv's load_dotenv() because it pulls the
+    entire file into os.environ — that's a footgun for users who keep
+    unrelated secrets in ~/.env.
+    """
+    for source in (Path.home() / ".env", Path.cwd() / ".env"):
+        scoped = _scoped_env_read(source)
+        for key, value in scoped.items():
+            # Project-local .env (loaded second) overrides ~/.env.
+            os.environ[key] = value
 
 
 _PLACEHOLDER_NAME_TOKENS = {"unknown", "n/a", "na", "none", "null", ""}

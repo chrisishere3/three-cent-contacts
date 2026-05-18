@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Find verified B2B contacts at ~$0.03 each. A waterfall of Perplexity Sonar, site scrapes, Hunter pattern detection, and Bouncer verification — runs cheapest stage first.",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "repository": "https://github.com/chrisishere3/three-cent-contacts"
   },
   "plugins": [
