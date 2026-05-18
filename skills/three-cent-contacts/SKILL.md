@@ -2,7 +2,7 @@
 name: three-cent-contacts
 description: Build a verified-email contact list from a CSV of companies + titles, at roughly $0.03 per verified contact. Runs a cheapest-first waterfall (Perplexity Sonar → site scrape → pattern detect → Hunter pattern → apply pattern → Bouncer verify → Bright Data SERP fallback). Use when the user wants to find work emails for B2B prospecting, build a cold outreach list, enrich a company list with contacts, or replace tools like Apollo, Hunter, or Clay for a one-off list build. Also use when the user mentions "find emails," "contact enrichment," "build a prospect list," "cheap email finder," "lead enrichment waterfall," or "cold email list."
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # Three Cent Contacts
