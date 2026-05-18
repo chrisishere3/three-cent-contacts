@@ -132,6 +132,10 @@ PRs and issues welcome. Especially appreciated:
 - Alternative verification providers (MillionVerifier is cheaper than Bouncer)
 - Cost optimizations
 
+## Security & data handling
+
+Short version: your API keys and your CSVs never leave your machine except as outbound requests to the third-party APIs you've authorized. No telemetry, no analytics, no phone-home. Full details, vulnerability reporting, and current scan results in [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE). Use it however you want.
