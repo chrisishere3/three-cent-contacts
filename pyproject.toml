@@ -20,7 +20,7 @@ Repository = "https://github.com/chrisishere3/three-cent-contacts"
 Issues = "https://github.com/chrisishere3/three-cent-contacts/issues"
 
 [project.scripts]
-three-cent-contacts = "scripts.run_waterfall:main"
+three-cent-contacts = "skills.three_cent_contacts.scripts.run_waterfall:main"
 
 [build-system]
 requires = ["setuptools>=68"]

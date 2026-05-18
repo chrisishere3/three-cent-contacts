@@ -23,7 +23,7 @@ When the user invokes this skill for the first time in a conversation, lead with
 
 > Tell me which companies you want and what title to find at each. Paste a list, drop a CSV, or just type a few. I'll handle the rest.
 
-Then silently check `~/.env` for `OPENROUTER_API_KEY` and `BOUNCER_API_KEY` while waiting for their reply. If either is missing, follow the "Required setup" section below to walk them through it before any run.
+Then silently check `~/.env` for `OPENROUTER_API_KEY` and `BOUNCER_API_KEY` while waiting for their reply. If either is missing, deliver the "Required setup" message below in your NEXT turn (after they've replied) — don't lead with setup, lead with the friendly opener so the conversation starts on momentum.
 
 ## Required setup
 
@@ -31,22 +31,33 @@ Two API keys are required. Check `~/.env` for both before running:
 - `OPENROUTER_API_KEY` — Perplexity Sonar (stage 1) + Gemini Flash (stages 2, 7)
 - `BOUNCER_API_KEY` — SMTP verification (stage 6)
 
-If either is missing, tell the user:
-> You'll need two API keys in `~/.env` before I can run this. Both have free signup credits and take ~3 minutes total:
-> 1. OpenRouter — https://openrouter.ai → API Keys → create one (starts with `sk-or-v1-`)
-> 2. Bouncer — https://usebouncer.com → API Access → create one
+If either is missing, tell the user **exactly this**:
+
+> Quick setup before I can run: add your OpenRouter and Bouncer keys to `~/.env`. Both are free signup, ~3 min. Hunter and Bright Data are optional if you've got them.
 >
-> Add them to `~/.env` like:
+> - OpenRouter — https://openrouter.ai → API Keys → create one (starts with `sk-or-v1-`)
+> - Bouncer — https://usebouncer.com → API Access → create one
+>
+> Then add them to `~/.env`:
 > ```
 > OPENROUTER_API_KEY=sk-or-v1-your-key
 > BOUNCER_API_KEY=your-bouncer-key
 > ```
+> Ping me when they're in and I'll pick up where we left off.
 
 Two more keys are **optional** (waterfall runs without them, with thinner coverage):
 - `HUNTER_API_KEY` — unlocks stage 4 (pattern fallback when names are known but no email)
 - `BRIGHTDATA_SERP_USERNAME` + `BRIGHTDATA_SERP_PASSWORD` — unlocks stage 7 (Google fallback for hard targets)
 
-For optional keys, just warn and continue.
+For optional keys, don't block; just mention "Note: Hunter/Bright Data not set, optional stages will skip" once and move on.
+
+## Python dependencies
+
+The skill ships Python code that needs three packages: `httpx`, `python-dotenv`, `click`. On first run, check whether they import. If `python3 -c "import httpx, dotenv, click"` fails, run `python3 -m pip install --user httpx python-dotenv click` once (silently, unless it errors). Then proceed.
+
+## Finding the script
+
+The waterfall code lives at `scripts/run_waterfall.py` **relative to this SKILL.md file**. When the skill is installed via `npx skills add`, that resolves to roughly `~/.agents/skills/three-cent-contacts/scripts/run_waterfall.py`. Always invoke the script using its full path resolved from the SKILL.md location, not a bare `scripts/run_waterfall.py` (which would look in the user's cwd and fail).
 
 ## Inputs
 
@@ -72,7 +83,7 @@ When you build the CSV from typed input, write it to a temp file and pass that p
 1. **Read the input CSV.** Count rows. Estimate ceiling cost (worst case, every row hits every stage) at `rows × $0.04`. See `references/cost-math.md` for the full breakdown.
 2. **If >= 50 rows, confirm before proceeding.** Quote the ceiling and the typical (`rows × $0.022`). Wait for go.
 3. **If < 50 rows, just proceed** but report total cost at the end.
-4. **Run `scripts/run_waterfall.py`** with the input/output paths and any flags.
+4. **Run the waterfall script** with `python3 <skill-dir>/scripts/run_waterfall.py --input <csv> --output <csv> [flags]`. Resolve `<skill-dir>` from this SKILL.md's location, not the user's cwd.
 5. **Stream stage hits to the user** as they happen ("row 47/412: stage 1 hit, found Sarah Kenner skenner@acme-pm.com, $0.005").
 6. **At completion, report:**
    - Total contacts found

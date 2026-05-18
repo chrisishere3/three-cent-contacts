@@ -66,7 +66,7 @@ The skill handles cost estimation, runs the waterfall, and writes a verified CSV
 Or run the script directly:
 
 ```bash
-python scripts/run_waterfall.py \
+python skills/three-cent-contacts/scripts/run_waterfall.py \
   --input ~/Downloads/prospects.csv \
   --output ~/Downloads/contacts.csv
 ```
