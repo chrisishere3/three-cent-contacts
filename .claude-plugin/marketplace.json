@@ -1,0 +1,19 @@
+{
+  "name": "three-cent-contacts",
+  "owner": {
+    "name": "Chris Berkley",
+    "url": "https://chris-as-is.com?ref=three-cent-contacts"
+  },
+  "metadata": {
+    "description": "Find verified B2B contacts at ~$0.03 each. A waterfall of Perplexity Sonar, site scrapes, Hunter pattern detection, and Bouncer verification — runs cheapest stage first.",
+    "version": "0.1.0",
+    "repository": "https://github.com/chrisishere3/three-cent-contacts"
+  },
+  "plugins": [
+    {
+      "name": "three-cent-contacts",
+      "description": "Claude Code skill that builds a verified-email list from a CSV of companies + titles, running each row through a cheapest-first waterfall (Sonar → site scrape → pattern detect → Hunter → apply → Bouncer verify → SERP fallback)",
+      "source": "./"
+    }
+  ]
+}

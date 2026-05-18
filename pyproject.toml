@@ -1,0 +1,27 @@
+[project]
+name = "three-cent-contacts"
+version = "0.1.0"
+description = "Find verified B2B contacts at ~$0.03 each via a cheapest-first waterfall (Sonar, site scrape, Hunter, Bouncer, Bright Data)."
+authors = [{ name = "Chris Berkley", email = "chris@chris-as-is.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.27",
+  "python-dotenv>=1.0",
+  "beautifulsoup4>=4.12",
+  "tenacity>=8.2",
+  "click>=8.1",
+]
+
+[project.urls]
+Homepage = "https://chris-as-is.com/projects/cheap-email-finder.html?ref=three-cent-contacts"
+Repository = "https://github.com/chrisishere3/three-cent-contacts"
+Issues = "https://github.com/chrisishere3/three-cent-contacts/issues"
+
+[project.scripts]
+three-cent-contacts = "scripts.run_waterfall:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

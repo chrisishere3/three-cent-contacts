@@ -1,0 +1,9 @@
+company,domain,name,title,email,stage_hit,cost,verified,verification_status
+Acme Property Management,acme-pm.com,Sarah Kenner,VP of Operations,skenner@acme-pm.com,1,0.015,true,deliverable
+Bayside Realty,bayside-realty.com,Marcus Yi,"Director, Leasing",marcus@bayside-realty.com,1,0.015,true,deliverable
+Oak Harbor Management,oakharbor-mgmt.com,Priya Shah,COO,pshah@oakharbor-mgmt.com,1,0.015,true,deliverable
+Cornerstone Properties,cornerstone-props.io,Devon Hill,CEO,dhill@cornerstone-props.io,2,0.015,true,deliverable
+Parkway Residential,parkway-residential.com,Anna Vogel,"Director, Ops",a.vogel@parkway-residential.com,2,0.015,true,deliverable
+Ridgepoint LLC,ridgepoint-llc.com,Jordan Cruz,Asset Manager,jcruz@ridgepoint-llc.com,4,0.025,true,deliverable
+Greenmile PM,greenmile-pm.com,Rachel Tran,VP Marketing,rtran@greenmile-pm.com,4,0.025,true,deliverable
+Summit Residential,summit-residential.net,Owen Park,President,opark@summit-residential.net,7,0.045,true,deliverable

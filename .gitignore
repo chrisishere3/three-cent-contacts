@@ -1,0 +1,30 @@
+# env
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+
+# caches the skill creates at runtime
+.three-cent-contacts/
+pattern_cache.json
+*.cache
+
+# outputs
+contacts_*.csv
+output/
+debug/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

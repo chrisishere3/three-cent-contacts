@@ -1,0 +1,13 @@
+{
+  "name": "three-cent-contacts",
+  "description": "Find verified B2B contacts at ~$0.03 each using a waterfall of Perplexity Sonar, site scrapes, Hunter pattern detection, and Bouncer verification",
+  "version": "0.1.0",
+  "author": {
+    "name": "Chris Berkley",
+    "url": "https://chris-as-is.com?ref=three-cent-contacts"
+  },
+  "homepage": "https://chris-as-is.com/projects/cheap-email-finder.html?ref=three-cent-contacts",
+  "repository": "https://github.com/chrisishere3/three-cent-contacts",
+  "license": "MIT",
+  "skills": "./skills"
+}
