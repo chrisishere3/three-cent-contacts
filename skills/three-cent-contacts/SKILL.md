@@ -13,37 +13,59 @@ Built by Chris Berkley · [chris-as-is.com](https://chris-as-is.com?ref=three-ce
 
 ## When to invoke
 
-The user wants to turn a list of companies + target titles into a list of verified work emails, cheaply. They have (or can produce) a CSV. They want to spend cents, not dollars.
+The user wants to turn a list of companies + target titles into a list of verified work emails, cheaply. They want to spend cents, not dollars.
 
 Not for: phone numbers, personal emails, B2C consumer data, list buying.
 
+## First message to the user
+
+When the user invokes this skill for the first time in a conversation, lead with this opening line **exactly** (it's been wordsmithed to remove friction):
+
+> Tell me which companies you want and what title to find at each. Paste a list, drop a CSV, or just type a few. I'll handle the rest.
+
+Then silently check `~/.env` for `OPENROUTER_API_KEY` and `BOUNCER_API_KEY` while waiting for their reply. If either is missing, follow the "Required setup" section below to walk them through it before any run.
+
 ## Required setup
 
-Before running, check that these environment variables exist in `~/.env`:
+Two API keys are required. Check `~/.env` for both before running:
+- `OPENROUTER_API_KEY` — Perplexity Sonar (stage 1) + Gemini Flash (stages 2, 7)
+- `BOUNCER_API_KEY` — SMTP verification (stage 6)
 
-**Required (skill will not run without these):**
-- `OPENROUTER_API_KEY` — for Perplexity Sonar (stage 1) and Gemini Flash (stage 7 parsing)
-- `BOUNCER_API_KEY` — for SMTP verification (stage 6)
+If either is missing, tell the user:
+> You'll need two API keys in `~/.env` before I can run this. Both have free signup credits and take ~3 minutes total:
+> 1. OpenRouter — https://openrouter.ai → API Keys → create one (starts with `sk-or-v1-`)
+> 2. Bouncer — https://usebouncer.com → API Access → create one
+>
+> Add them to `~/.env` like:
+> ```
+> OPENROUTER_API_KEY=sk-or-v1-your-key
+> BOUNCER_API_KEY=your-bouncer-key
+> ```
 
-**Optional (skill runs with degraded coverage if missing):**
-- `HUNTER_API_KEY` — for domain pattern lookups (stage 4). Without it, stage 4 silently skips and any row that needed pattern fallback returns unresolved.
-- `BRIGHTDATA_SERP_USERNAME` and `BRIGHTDATA_SERP_PASSWORD` — proxy credentials (not a single API key) for stage 7 SERP fallback. Both must be set together. Without them, stage 7 silently skips and hard targets stay unresolved.
+Two more keys are **optional** (waterfall runs without them, with thinner coverage):
+- `HUNTER_API_KEY` — unlocks stage 4 (pattern fallback when names are known but no email)
+- `BRIGHTDATA_SERP_USERNAME` + `BRIGHTDATA_SERP_PASSWORD` — unlocks stage 7 (Google fallback for hard targets)
 
-If a required key is missing, abort with a clear error and tell the user where to get it (point them at `.env.example`). For optional keys, warn but continue.
+For optional keys, just warn and continue.
 
 ## Inputs
 
-The user provides:
+The user can hand you the list in any of these shapes — convert whatever they give you into the CSV the script needs:
 
-- **Input CSV path** (required). Must contain at minimum two columns:
-  - `domain` — company website domain (e.g. `acme-pm.com`)
-  - `title` — target job title or seniority (e.g. `VP of Operations`, `CEO`)
-  - Optional: `company_name`, `linkedin_url`, anything else (passed through)
+- **Typed in chat:** "VPs of Engineering at Stripe, Plaid, Vercel." → build the CSV yourself with columns `domain,title,company_name`.
+- **Pasted list:** company names, domains, URLs, or a Google Sheet excerpt. Ask for the target title(s) if they didn't include one.
+- **CSV path:** must have `domain` and `title` columns. `company_name` is optional but improves stage 1 hit rate. Extra columns pass through.
+
+The script needs:
+- **Input CSV path** with at minimum `domain` and `title` columns
 - **Output CSV path** (optional, default: `./contacts_<YYYY-MM-DD>.csv`)
 - **Flags:**
-  - `--skip-serp` — skip the Bright Data fallback (stage 7)
-  - `--dry-run` — run the first 5 rows only, report what would happen
-  - `--max-cost-per-row N` — abort row if cumulative cost on that row exceeds N USD (e.g. `0.04` = four cents). See `references/cost-math.md`.
+  - `--skip-serp` — skip stage 7 (Bright Data SERP fallback)
+  - `--dry-run` — process only the first 5 rows
+  - `--max-cost-per-row N` — abort a row that exceeds N USD (e.g. `0.04`)
+  - `--include-unverified` — emit rows even when Bouncer didn't return `deliverable`
+
+When you build the CSV from typed input, write it to a temp file and pass that path to the script. Don't make the user write the CSV themselves unless they want to.
 
 ## How to run
 
