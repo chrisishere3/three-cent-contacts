@@ -13,6 +13,10 @@ skip if their credentials are absent.
   Stage 6  Bouncer SMTP verify    (Bouncer)      ~$0.010
   Stage 7  Bright Data SERP       (BD + OR)      ~$0.015-0.025 (optional)
 
+Rows are processed concurrently (default 5 workers; --concurrency). Results
+append to the output CSV as they finish, so a crashed or aborted run can pick
+up where it left off with --resume.
+
 Usage:
     python scripts/run_waterfall.py --input prospects.csv --output contacts.csv
 """
@@ -40,7 +44,7 @@ from email_patterns import (
 from normalizer import extract_domain
 from stages.stage1_sonar import research_company_contacts
 from stages.stage2_site_scrape import extract_contacts_from_website
-from stages.stage6_bouncer import verify_email
+from stages.stage6_bouncer import BouncerCreditsError, verify_email
 from stages.stage7_serp import serp_lookup
 
 
@@ -78,6 +82,8 @@ COST_STAGE7_SERP = 0.020  # BD proxy charge + Gemini parse.
 
 TYPICAL_COST_PER_ROW = 0.022
 CEILING_COST_PER_ROW = 0.060  # All stages fire, plus a couple of Bouncer checks.
+
+DEFAULT_CONCURRENCY = 5
 
 
 # --------------------------- helpers ---------------------------
@@ -202,12 +208,15 @@ def _is_placeholder_email(email: str) -> bool:
 
 
 def _email_at_domain(email: Optional[str], domain: str) -> bool:
+    """True for exact-domain and subdomain matches (john@mail.acme.com)."""
     if not email or not domain:
         return False
     cleaned = email.strip().lower()
     if _is_placeholder_email(cleaned):
         return False
-    return cleaned.endswith(f"@{domain.lower()}")
+    email_domain = cleaned.rpartition("@")[2]
+    target = domain.lower()
+    return email_domain == target or email_domain.endswith(f".{target}")
 
 
 def _candidate_first_last(
@@ -240,6 +249,20 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return out
 
 
+def _row_domain(row: Dict[str, str]) -> str:
+    domain_raw = (row.get("domain") or "").strip()
+    return extract_domain(website=domain_raw) or domain_raw.lower()
+
+
+# Per-domain locks so concurrent rows for the same domain don't both pay
+# Hunter for a pattern the other is already fetching.
+_domain_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _domain_lock(domain: str) -> asyncio.Lock:
+    return _domain_locks.setdefault(domain, asyncio.Lock())
+
+
 # --------------------------- waterfall ---------------------------
 
 
@@ -249,14 +272,17 @@ async def _verify_first_domain_hit(
     *,
     budget_remaining: Optional[float],
     on_bouncer_call: Any,
-) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+) -> Tuple[
+    Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], Dict[str, Any]]]
+]:
     """
     Walk candidates and Bouncer-verify the first one whose email is at domain.
-    Returns (verified_candidate, verification_result, last_unverified_seen).
+    Returns (verified_candidate, verification_result, first_risky) where
+    first_risky is a (candidate, check) pair for the first catch-all/'risky'
+    result seen, so the caller can surface it if nothing fully verifies.
     Calls on_bouncer_call() each time we spend a Bouncer credit.
     """
-    last_unverified: Optional[Dict[str, Any]] = None
-    last_check: Optional[Dict[str, Any]] = None
+    first_risky: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
     for candidate in candidates:
         if not _email_at_domain(candidate.get("email"), domain):
             continue
@@ -267,13 +293,13 @@ async def _verify_first_domain_hit(
         if budget_remaining is not None:
             budget_remaining -= COST_STAGE6_BOUNCER
         if check.get("verified"):
-            return candidate, check, None
-        last_unverified = candidate
-        last_check = check
-    return None, None, last_unverified if last_check else None
+            return candidate, check, first_risky
+        if check.get("risky") and first_risky is None:
+            first_risky = (candidate, check)
+    return None, None, first_risky
 
 
-def _emit_verified(
+def _emit_contact(
     *,
     candidate: Dict[str, Any],
     check: Dict[str, Any],
@@ -302,7 +328,6 @@ def _emit_unverified_best(
     company: str,
     domain: str,
     title: str,
-    stage_hit: int,
     row_cost: float,
 ) -> Dict[str, Any]:
     """Prefer an on-domain candidate over an off-domain one."""
@@ -324,7 +349,7 @@ def _emit_unverified_best(
         "name": _full_name(best),
         "title": best.get("title") or title,
         "email": raw_email,
-        "stage_hit": stage_hit,
+        "stage_hit": best.get("_stage", 0),
         "cost": round(row_cost, 4),
         "verified": "false",
         "verification_status": status,
@@ -349,15 +374,19 @@ async def process_row(
     row: Dict[str, str],
     *,
     include_unverified: bool,
+    include_risky: bool,
     max_cost_per_row: Optional[float],
     skip_serp: bool,
 ) -> Dict[str, Any]:
-    domain_raw = (row.get("domain") or "").strip()
-    domain = extract_domain(website=domain_raw) or domain_raw.lower()
+    domain = _row_domain(row)
     company = (row.get("company_name") or domain).strip()
     title = (row.get("title") or "").strip()
 
     row_cost = 0.0
+    # First 'risky' (catch-all domain) result seen anywhere in the row, as
+    # (candidate, check, stage). Real addresses on catch-all domains come back
+    # 'risky', so this is worth surfacing when nothing fully verifies.
+    risky_hit: Optional[Tuple[Dict[str, Any], Dict[str, Any], int]] = None
 
     def budget_left() -> Optional[float]:
         if max_cost_per_row is None:
@@ -368,6 +397,16 @@ async def process_row(
         nonlocal row_cost
         row_cost += COST_STAGE6_BOUNCER
 
+    def note_risky(risky: Optional[Tuple[Dict[str, Any], Dict[str, Any]]], stage: int):
+        nonlocal risky_hit
+        if risky and risky_hit is None:
+            risky_hit = (risky[0], risky[1], stage)
+
+    def tag(contacts: List[Dict[str, Any]], stage: int) -> List[Dict[str, Any]]:
+        for c in contacts:
+            c.setdefault("_stage", stage)
+        return contacts
+
     candidates: List[Dict[str, Any]] = []
 
     # ---- Stage 1: Sonar ----
@@ -376,13 +415,14 @@ async def process_row(
     )
     row_cost += COST_STAGE1_SONAR
     if sonar:
-        candidates.extend(sonar)
+        candidates.extend(tag(sonar, 1))
 
-    chosen, check, _ = await _verify_first_domain_hit(
+    chosen, check, risky = await _verify_first_domain_hit(
         candidates, domain, budget_remaining=budget_left(), on_bouncer_call=on_bouncer
     )
+    note_risky(risky, 1)
     if chosen and check:
-        return _emit_verified(
+        return _emit_contact(
             candidate=chosen, check=check, company=company, domain=domain,
             title=title, stage_hit=1, row_cost=row_cost,
         )
@@ -392,48 +432,49 @@ async def process_row(
         scraped = await extract_contacts_from_website(domain=domain, target_role=title or "contact")
         row_cost += COST_STAGE2_SCRAPE_AI
         if scraped:
-            candidates.extend(scraped)
+            candidates.extend(tag(scraped, 2))
             candidates = _dedupe_candidates(candidates)
-            chosen, check, _ = await _verify_first_domain_hit(
+            chosen, check, risky = await _verify_first_domain_hit(
                 candidates, domain, budget_remaining=budget_left(), on_bouncer_call=on_bouncer
             )
+            note_risky(risky, 2)
             if chosen and check:
-                return _emit_verified(
+                return _emit_contact(
                     candidate=chosen, check=check, company=company, domain=domain,
                     title=title, stage_hit=2, row_cost=row_cost,
                 )
 
     # ---- Stage 3-5: pattern detect / fetch / apply ----
-    pattern = await get_cached_pattern(domain)
-    pattern_source = "cache" if pattern else None
+    # Per-domain lock so concurrent rows for the same domain share one pattern
+    # lookup instead of both paying Hunter.
+    async with _domain_lock(domain):
+        pattern = await get_cached_pattern(domain)
 
-    # Stage 3 — detect from any on-domain emails we already have.
-    if not pattern:
-        for c in candidates:
-            email = (c.get("email") or "").strip().lower()
-            first, last = _candidate_first_last(c)
-            if email and first and last and _email_at_domain(email, domain):
-                detected = detect_pattern(email, first, last)
-                if detected:
-                    pattern = {"pattern": detected, "confidence": 0.80, "source": "stage3_detect"}
-                    await save_pattern(domain, pattern)
-                    pattern_source = "stage3_detect"
-                    break
+        # Stage 3 — detect from any on-domain emails we already have.
+        if not pattern:
+            for c in candidates:
+                email = (c.get("email") or "").strip().lower()
+                first, last = _candidate_first_last(c)
+                if email and first and last and _email_at_domain(email, domain):
+                    detected = detect_pattern(email, first, last)
+                    if detected:
+                        pattern = {"pattern": detected, "confidence": 0.80, "source": "stage3_detect"}
+                        await save_pattern(domain, pattern)
+                        break
 
-    # Stage 4 — Hunter fallback (only if we have names but still no pattern).
-    has_named_candidates = any(_candidate_first_last(c) != (None, None) for c in candidates)
-    if (
-        not pattern
-        and has_named_candidates
-        and os.getenv("HUNTER_API_KEY")
-        and (max_cost_per_row is None or row_cost + COST_STAGE4_HUNTER < max_cost_per_row)
-    ):
-        hunter = await get_pattern_from_hunter(domain)
-        row_cost += COST_STAGE4_HUNTER
-        if hunter:
-            pattern = hunter
-            await save_pattern(domain, pattern)
-            pattern_source = "stage4_hunter"
+        # Stage 4 — Hunter fallback (only if we have names but still no pattern).
+        has_named_candidates = any(_candidate_first_last(c) != (None, None) for c in candidates)
+        if (
+            not pattern
+            and has_named_candidates
+            and os.getenv("HUNTER_API_KEY")
+            and (max_cost_per_row is None or row_cost + COST_STAGE4_HUNTER < max_cost_per_row)
+        ):
+            hunter = await get_pattern_from_hunter(domain)
+            row_cost += COST_STAGE4_HUNTER
+            if hunter:
+                pattern = hunter
+                await save_pattern(domain, pattern)
 
     # Stage 5 — generate emails from pattern, verify each until one passes.
     if pattern and pattern.get("pattern"):
@@ -442,8 +483,8 @@ async def process_row(
             (c.get("email") or "").strip().lower() for c in candidates if c.get("email")
         }
         for c in candidates:
-            if c.get("email"):
-                continue  # Already had an email; no point regenerating it.
+            if _email_at_domain(c.get("email"), domain):
+                continue  # Already has a corporate email; it just failed verify.
             first, last = _candidate_first_last(c)
             if not (first and last):
                 continue
@@ -451,7 +492,9 @@ async def process_row(
             if not new_email or new_email.lower() in seen_emails:
                 continue
             seen_emails.add(new_email.lower())
-            generated.append({**c, "email": new_email, "source": f"pattern:{pattern['pattern']}"})
+            generated.append(
+                {**c, "email": new_email, "_stage": 5, "source": f"pattern:{pattern['pattern']}"}
+            )
 
         for candidate in generated:
             if max_cost_per_row is not None and row_cost + COST_STAGE6_BOUNCER > max_cost_per_row:
@@ -460,11 +503,12 @@ async def process_row(
             on_bouncer()
             await update_pattern_stats(domain, bool(check.get("verified")))
             if check.get("verified"):
-                stage_hit = 5
-                return _emit_verified(
+                return _emit_contact(
                     candidate=candidate, check=check, company=company, domain=domain,
-                    title=title, stage_hit=stage_hit, row_cost=row_cost,
+                    title=title, stage_hit=5, row_cost=row_cost,
                 )
+            if check.get("risky"):
+                note_risky((candidate, check), 5)
         # Even if no generated email verified, keep them as unverified candidates.
         candidates.extend(generated)
         candidates = _dedupe_candidates(candidates)
@@ -479,22 +523,31 @@ async def process_row(
         serp_candidates = await serp_lookup(company=company, domain=domain, title=title or "contact")
         row_cost += COST_STAGE7_SERP
         if serp_candidates:
-            candidates.extend(serp_candidates)
+            candidates.extend(tag(serp_candidates, 7))
             candidates = _dedupe_candidates(candidates)
-            chosen, check, _ = await _verify_first_domain_hit(
+            chosen, check, risky = await _verify_first_domain_hit(
                 serp_candidates, domain, budget_remaining=budget_left(), on_bouncer_call=on_bouncer
             )
+            note_risky(risky, 7)
             if chosen and check:
-                return _emit_verified(
+                return _emit_contact(
                     candidate=chosen, check=check, company=company, domain=domain,
                     title=title, stage_hit=7, row_cost=row_cost,
                 )
 
-    # ---- Nothing verified. Optionally emit best unverified candidate. ----
+    # ---- Nothing fully verified. ----
+    # A 'risky' hit is a real address on a catch-all domain — with
+    # --include-risky, emit it as the row's result (verified stays false).
+    if include_risky and risky_hit:
+        candidate, check, stage = risky_hit
+        return _emit_contact(
+            candidate=candidate, check=check, company=company, domain=domain,
+            title=title, stage_hit=stage, row_cost=row_cost,
+        )
     if include_unverified and candidates:
         return _emit_unverified_best(
             candidates=candidates, company=company, domain=domain,
-            title=title, stage_hit=1, row_cost=row_cost,
+            title=title, row_cost=row_cost,
         )
     return _emit_empty(company, domain, title, row_cost)
 
@@ -503,35 +556,64 @@ async def process_rows(
     rows: List[Dict[str, str]],
     output_path: Path,
     include_unverified: bool,
+    include_risky: bool,
     max_cost_per_row: Optional[float],
     skip_serp: bool,
+    concurrency: int,
+    append: bool,
 ) -> Dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    totals = {"rows": 0, "verified": 0, "cost": 0.0, "stages": {}}
-    with output_path.open("w", newline="", encoding="utf-8") as f:
+    totals: Dict[str, Any] = {
+        "rows": 0, "verified": 0, "risky": 0, "cost": 0.0, "stages": {}, "aborted": False,
+    }
+    sem = asyncio.Semaphore(max(1, concurrency))
+    write_lock = asyncio.Lock()
+    abort = asyncio.Event()
+    done_count = 0
+
+    mode = "a" if append and output_path.exists() and output_path.stat().st_size > 0 else "w"
+    with output_path.open(mode, newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=OUTPUT_COLUMNS)
-        writer.writeheader()
-        for i, row in enumerate(rows, start=1):
-            result = await process_row(
-                row,
-                include_unverified=include_unverified,
-                max_cost_per_row=max_cost_per_row,
-                skip_serp=skip_serp,
-            )
-            writer.writerow(result)
-            f.flush()
-            totals["rows"] += 1
-            totals["cost"] += float(result.get("cost") or 0)
-            if result.get("verified") == "true":
-                totals["verified"] += 1
-            stage = result.get("stage_hit", 0)
-            totals["stages"][stage] = totals["stages"].get(stage, 0) + 1
-            status = result["verification_status"]
-            email = result["email"] or "(none)"
-            click.echo(
-                f"[{i}/{len(rows)}] {result['company']} | stage={result['stage_hit']} "
-                f"| {email} | {status} | ${result['cost']:.4f}"
-            )
+        if mode == "w":
+            writer.writeheader()
+
+        async def worker(row: Dict[str, str]) -> None:
+            nonlocal done_count
+            async with sem:
+                if abort.is_set():
+                    return
+                try:
+                    result = await process_row(
+                        row,
+                        include_unverified=include_unverified,
+                        include_risky=include_risky,
+                        max_cost_per_row=max_cost_per_row,
+                        skip_serp=skip_serp,
+                    )
+                except BouncerCreditsError:
+                    abort.set()
+                    return
+            async with write_lock:
+                writer.writerow(result)
+                f.flush()
+                done_count += 1
+                totals["rows"] += 1
+                totals["cost"] += float(result.get("cost") or 0)
+                if result.get("verified") == "true":
+                    totals["verified"] += 1
+                if result.get("verification_status") == "risky":
+                    totals["risky"] += 1
+                stage = result.get("stage_hit", 0)
+                totals["stages"][stage] = totals["stages"].get(stage, 0) + 1
+                email = result["email"] or "(none)"
+                click.echo(
+                    f"[{done_count}/{len(rows)}] {result['company']} | stage={result['stage_hit']} "
+                    f"| {email} | {result['verification_status']} | ${result['cost']:.4f}"
+                )
+
+        await asyncio.gather(*(worker(row) for row in rows))
+
+    totals["aborted"] = abort.is_set()
     return totals
 
 
@@ -569,6 +651,29 @@ async def process_rows(
     is_flag=True,
     help="Emit rows even when Bouncer didn't return 'deliverable'.",
 )
+@click.option(
+    "--include-risky",
+    is_flag=True,
+    help=(
+        "Emit 'risky' results (catch-all domains — usually real addresses "
+        "Bouncer can't SMTP-confirm) as row results, marked verified=false."
+    ),
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=DEFAULT_CONCURRENCY,
+    show_default=True,
+    help="How many rows to process in parallel.",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    help=(
+        "Skip input rows whose domain already appears in the output CSV and "
+        "append new results to it. Use after a crash or credit-exhaustion abort."
+    ),
+)
 def main(
     input_path: Path,
     output_path: Optional[Path],
@@ -576,6 +681,9 @@ def main(
     dry_run: bool,
     max_cost_per_row: Optional[float],
     include_unverified: bool,
+    include_risky: bool,
+    concurrency: int,
+    resume: bool,
 ) -> None:
     load_env_files()
 
@@ -597,22 +705,37 @@ def main(
         )
 
     rows = read_input(input_path)
+    resolved_output = output_path or Path.cwd() / f"contacts_{date.today().isoformat()}.csv"
+
+    if resume and resolved_output.exists():
+        with resolved_output.open(newline="", encoding="utf-8") as f:
+            done_domains = {
+                (r.get("domain") or "").strip().lower() for r in csv.DictReader(f)
+            }
+        before = len(rows)
+        rows = [r for r in rows if _row_domain(r) not in done_domains]
+        click.echo(f"Resume: {before - len(rows)} rows already in output, {len(rows)} to go.")
+
     if dry_run:
         rows = rows[:5]
 
+    if not rows:
+        click.echo("Nothing to do.")
+        return
+
     typical, ceiling = estimate_cost(len(rows))
-    resolved_output = output_path or Path.cwd() / f"contacts_{date.today().isoformat()}.csv"
 
     click.echo("=" * 60)
     click.echo(f"Three Cent Contacts — {len(rows)} rows")
     click.echo("=" * 60)
-    click.echo(f"  Input:     {input_path}")
-    click.echo(f"  Output:    {resolved_output}")
-    click.echo(f"  Est cost:  ${typical:.2f} typical / ${ceiling:.2f} ceiling")
-    click.echo(f"  Skip SERP: {skip_serp}")
-    click.echo(f"  Dry run:   {dry_run}")
+    click.echo(f"  Input:       {input_path}")
+    click.echo(f"  Output:      {resolved_output}")
+    click.echo(f"  Est cost:    ${typical:.2f} typical / ${ceiling:.2f} ceiling")
+    click.echo(f"  Concurrency: {concurrency}")
+    click.echo(f"  Skip SERP:   {skip_serp}")
+    click.echo(f"  Dry run:     {dry_run}")
     if max_cost_per_row is not None:
-        click.echo(f"  Max/row:   ${max_cost_per_row:.4f}")
+        click.echo(f"  Max/row:     ${max_cost_per_row:.4f}")
     click.echo("")
 
     totals = asyncio.run(
@@ -620,20 +743,34 @@ def main(
             rows=rows,
             output_path=resolved_output,
             include_unverified=include_unverified,
+            include_risky=include_risky,
             max_cost_per_row=max_cost_per_row,
             skip_serp=skip_serp,
+            concurrency=concurrency,
+            append=resume,
         )
     )
 
     click.echo("")
     click.echo("=" * 60)
     click.echo(f"Done. {totals['verified']}/{totals['rows']} verified · "
+               f"{totals['risky']} risky (catch-all) · "
                f"total ${totals['cost']:.4f} · "
                f"avg ${totals['cost'] / max(totals['rows'], 1):.4f}/row")
     if totals["stages"]:
         dist = ", ".join(f"stage {s}: {n}" for s, n in sorted(totals["stages"].items()))
         click.echo(f"Stage distribution: {dist}")
     click.echo(f"Wrote {resolved_output}")
+
+    if totals["aborted"]:
+        click.echo("", err=True)
+        click.echo(
+            "ABORTED: Bouncer is out of credits. "
+            f"{totals['rows']} rows finished and are saved. "
+            "Top up at usebouncer.com, then re-run the same command with --resume.",
+            err=True,
+        )
+        sys.exit(2)
 
 
 if __name__ == "__main__":

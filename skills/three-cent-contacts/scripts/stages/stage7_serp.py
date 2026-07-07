@@ -28,10 +28,9 @@ from urllib.parse import quote_plus
 
 import httpx
 
-from _openrouter import chat_completion, extract_json  # type: ignore
+from _openrouter import GEMINI_MODEL as MODEL, chat_completion, extract_json  # type: ignore
 
 
-MODEL = "google/gemini-flash-1.5"
 PROXY_HOST = "brd.superproxy.io:33335"
 QUERY_TIMEOUT_S = 60.0
 USER_AGENT = (
@@ -134,8 +133,13 @@ def filter_to_domain(candidates: List[Dict[str, Any]], domain: str) -> List[Dict
     """
     if not domain:
         return []
-    suffix = f"@{domain.lower()}"
-    return [c for c in candidates if (c.get("email") or "").strip().lower().endswith(suffix)]
+    target = domain.lower()
+
+    def _on_domain(email: str) -> bool:
+        email_domain = email.strip().lower().rpartition("@")[2]
+        return email_domain == target or email_domain.endswith(f".{target}")
+
+    return [c for c in candidates if _on_domain(c.get("email") or "")]
 
 
 async def serp_lookup(company: str, domain: str, title: str) -> List[Dict[str, Any]]:

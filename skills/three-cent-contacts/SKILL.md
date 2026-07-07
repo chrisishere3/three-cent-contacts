@@ -2,7 +2,7 @@
 name: three-cent-contacts
 description: Build a verified-email contact list from a CSV of companies + titles, at roughly $0.03 per verified contact. Runs a cheapest-first waterfall (Perplexity Sonar → site scrape → pattern detect → Hunter pattern → apply pattern → Bouncer verify → Bright Data SERP fallback). Use when the user wants to find work emails for B2B prospecting, build a cold outreach list, enrich a company list with contacts, or replace tools like Apollo, Hunter, or Clay for a one-off list build. Also use when the user mentions "find emails," "contact enrichment," "build a prospect list," "cheap email finder," "lead enrichment waterfall," or "cold email list."
 metadata:
-  version: 0.2.2
+  version: 0.3.0
 ---
 
 # Three Cent Contacts
@@ -75,19 +75,24 @@ The script needs:
   - `--dry-run` — process only the first 5 rows
   - `--max-cost-per-row N` — abort a row that exceeds N USD (e.g. `0.04`)
   - `--include-unverified` — emit rows even when Bouncer didn't return `deliverable`
+  - `--include-risky` — emit `risky` results (catch-all domains; usually real addresses Bouncer can't SMTP-confirm) as row results, marked `verified=false`
+  - `--concurrency N` — rows processed in parallel (default 5)
+  - `--resume` — skip domains already in the output CSV and append; use after a crash or a Bouncer credit-exhaustion abort
 
 When you build the CSV from typed input, write it to a temp file and pass that path to the script. Don't make the user write the CSV themselves unless they want to.
 
 ## How to run
 
-1. **Read the input CSV.** Count rows. Estimate ceiling cost (worst case, every row hits every stage) at `rows × $0.04`. See `references/cost-math.md` for the full breakdown.
+1. **Read the input CSV.** Count rows. Estimate ceiling cost (worst case, every row hits every stage) at `rows × $0.06`. See `references/cost-math.md` for the full breakdown.
 2. **If >= 50 rows, confirm before proceeding.** Quote the ceiling and the typical (`rows × $0.022`). Wait for go.
 3. **If < 50 rows, just proceed** but report total cost at the end.
 4. **Run the waterfall script** with `python3 <skill-dir>/scripts/run_waterfall.py --input <csv> --output <csv> [flags]`. Resolve `<skill-dir>` from this SKILL.md's location, not the user's cwd.
-5. **Stream stage hits to the user** as they happen ("row 47/412: stage 1 hit, found Sarah Kenner skenner@acme-pm.com, $0.005").
-6. **At completion, report:**
+5. **Stream stage hits to the user** as they happen ("row 47/412: stage 1 hit, found Sarah Kenner skenner@acme-pm.com, $0.005"). Rows run in parallel, so output order won't match input order — that's normal.
+6. **If the script exits with "ABORTED: Bouncer is out of credits"**, tell the user plainly: results so far are saved, top up Bouncer credits, and you'll re-run with `--resume` to finish the rest without re-paying for done rows.
+7. **At completion, report:**
    - Total contacts found
    - Verification rate (% deliverable)
+   - Risky count (catch-all domains — usually real people Bouncer can't SMTP-confirm; not failures)
    - Total cost
    - Average cost per verified contact
    - Stage distribution (how many hit each stage)
@@ -119,7 +124,7 @@ CSV with these columns:
 - `verified` (true if Bouncer returned `deliverable`)
 - `verification_status` (Bouncer raw status)
 
-Only `verified=true` rows are emitted by default. To include unverified, pass `--include-unverified`.
+Every input row gets an output row. Only rows where Bouncer returned `deliverable` carry `verified=true`; rows that found nothing emit with `verification_status=no_candidate`. Pass `--include-risky` to surface catch-all-domain results and `--include-unverified` to keep best-guess unverified candidates.
 
 ## Things to watch for
 
@@ -129,7 +134,9 @@ Only `verified=true` rows are emitted by default. To include unverified, pass `-
 
 **Sonar request fees.** Sonar's token cost is tiny; the per-request **search fee** is what adds up. Stage 1 is $0.005 because of the search, not the tokens. Don't accidentally retry stage 1 in a loop.
 
-**Bouncer credits.** Verify the user has credits before a large batch. Mid-batch credit exhaustion silently fails.
+**Bouncer credits.** Verify the user has credits before a large batch. If credits run out mid-batch, the script aborts loudly (exit code 2), keeps everything finished so far, and a re-run with `--resume` picks up the remaining rows.
+
+**Risky ≠ failed.** Catch-all domains return `risky` for real addresses (Bouncer can't SMTP-confirm them). For B2B lists these are often a meaningful share; suggest `--include-risky` when the verified rate looks low.
 
 ## References
 

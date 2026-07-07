@@ -16,9 +16,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -101,14 +102,28 @@ def _is_expired(entry: Dict[str, Any]) -> bool:
     return (datetime.utcnow() - updated) > timedelta(days=TTL_DAYS)
 
 
+def _normalize_name(name: str) -> str:
+    """
+    Lowercase, fold diacritics to ASCII (Müller → muller), then strip anything
+    that isn't a-z. Without the fold, non-ASCII letters were dropped entirely
+    (Müller → mller), generating emails that can never verify.
+    """
+    folded = (
+        unicodedata.normalize("NFKD", name.lower().strip())
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    return re.sub(r"[^a-z]", "", folded)
+
+
 def detect_pattern(email: str, first_name: str, last_name: str) -> Optional[str]:
     """Given a verified email and name, return the pattern key or None."""
     if not email or not first_name or not last_name:
         return None
     try:
         local = email.split("@")[0].lower()
-        first = first_name.lower().strip()
-        last = last_name.lower().strip()
+        first = _normalize_name(first_name)
+        last = _normalize_name(last_name)
         if not first or not last:
             return None
         for pattern_name, generator in PATTERNS.items():
@@ -129,8 +144,8 @@ def generate_email(
     """Generate an email address using a known pattern."""
     if not first_name or not last_name or not domain or not pattern:
         return None
-    first = re.sub(r"[^a-z]", "", first_name.lower().strip())
-    last = re.sub(r"[^a-z]", "", last_name.lower().strip())
+    first = _normalize_name(first_name)
+    last = _normalize_name(last_name)
     if not first or not last:
         return None
     generator = PATTERNS.get(pattern)
@@ -252,60 +267,3 @@ async def update_pattern_stats(domain: str, success: bool) -> None:
     pattern["updated_at"] = _utcnow_iso()
     cache[domain] = pattern
     _write_cache(cache)
-
-
-async def should_verify_email(email: str, source: str, domain: str) -> Dict[str, Any]:
-    """Policy decision for whether to spend a Bouncer credit on this email."""
-    if source in ("hunter_verified",):
-        return {
-            "verify": False,
-            "reason": "pre_verified_source",
-            "confidence_without_verify": 0.95,
-        }
-    pattern = await get_cached_pattern(domain)
-    if pattern:
-        total = pattern.get("verified_count", 0) + pattern.get("failed_count", 0)
-        if total > 0:
-            success_rate = pattern.get("verified_count", 0) / total
-        else:
-            success_rate = pattern.get("confidence", 0.5)
-        sample_count = pattern.get("sample_count", 0)
-        if success_rate >= 0.95 and sample_count >= 10:
-            return {
-                "verify": False,
-                "reason": "trusted_pattern",
-                "confidence_without_verify": 0.92,
-            }
-        if success_rate >= 0.80:
-            return {
-                "verify": "optional",
-                "reason": "moderate_pattern",
-                "confidence_without_verify": 0.75,
-            }
-    return {
-        "verify": True,
-        "reason": "unverified_source",
-        "confidence_without_verify": 0.50,
-    }
-
-
-def get_all_possible_emails(
-    first_name: str, last_name: str, domain: str
-) -> List[Dict[str, Any]]:
-    """Return ordered candidate emails for a contact, most-likely first."""
-    pattern_order = [
-        "first.last",
-        "flast",
-        "firstlast",
-        "first",
-        "f.last",
-        "first_last",
-        "firstl",
-        "last.first",
-    ]
-    results: List[Dict[str, Any]] = []
-    for pattern in pattern_order:
-        email = generate_email(first_name, last_name, domain, pattern)
-        if email:
-            results.append({"email": email, "pattern": pattern})
-    return results

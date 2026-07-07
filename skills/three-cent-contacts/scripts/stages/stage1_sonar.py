@@ -11,23 +11,23 @@ waterfall iterates rows, not people, so we always ask for "up to N contacts at
 this company in this role".
 
 Hardening vs source:
-  - Model centralized to MODEL constant (was hardcoded inline twice).
+  - Calls go through _openrouter.chat_completion, which retries transient
+    failures (429/5xx/timeouts) with backoff.
+  - max_tokens=1200: five contacts with seven fields regularly exceeded the
+    old 500-token cap; a truncated array fails every parse fallback and the
+    whole stage-1 result was silently discarded.
   - JSON parsing falls back to regex extraction when Sonar prefixes prose.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import re
 from typing import Any, Dict, List, Optional
 
-import httpx
+from _openrouter import chat_completion, extract_json  # type: ignore
 
 
 MODEL = "perplexity/sonar"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-REQUEST_TIMEOUT_S = 60.0
+MAX_TOKENS = 1200
 
 
 ROLE_DESCRIPTIONS = {
@@ -37,49 +37,6 @@ ROLE_DESCRIPTIONS = {
     "ceo": "CEO, president, or executive directors",
     "contact": "key contacts, owners, executives, or decision makers",
 }
-
-
-def _api_key() -> Optional[str]:
-    return os.getenv("OPENROUTER_API_KEY")
-
-
-def _extract_json(content: str) -> Any:
-    """
-    Sonar usually returns clean JSON but sometimes prefixes prose, wraps it in
-    ```json fences, or appends a citation block. Try strict parse first, then
-    fenced-block extraction, then a regex grab of the first {...} or [...].
-    """
-    if not content:
-        return None
-
-    raw = content.strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    if "```json" in raw:
-        try:
-            inner = raw.split("```json", 1)[1].split("```", 1)[0].strip()
-            return json.loads(inner)
-        except (IndexError, json.JSONDecodeError):
-            pass
-    elif "```" in raw:
-        try:
-            inner = raw.split("```", 1)[1].split("```", 1)[0].strip()
-            return json.loads(inner)
-        except (IndexError, json.JSONDecodeError):
-            pass
-
-    for pattern in (r"\[.*\]", r"\{.*\}"):
-        match = re.search(pattern, raw, flags=re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                continue
-
-    return None
 
 
 def _build_query(company: str, domain: Optional[str], target_role: str, max_contacts: int) -> str:
@@ -125,48 +82,28 @@ async def research_company_contacts(
     max_contacts: int = 5,
 ) -> Optional[List[Dict[str, Any]]]:
     """Return a list of contact dicts, or None when the call/parse fails."""
-    api_key = _api_key()
-    if not api_key:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a research assistant that finds business contacts. "
+                "Only return factual information you find in your search. "
+                "Never make up or guess contact details. Return results as JSON."
+            ),
+        },
+        {
+            "role": "user",
+            "content": _build_query(company, domain, target_role, max_contacts),
+        },
+    ]
+
+    content = await chat_completion(
+        model=MODEL, messages=messages, temperature=0.1, max_tokens=MAX_TOKENS
+    )
+    if not content:
         return None
 
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a research assistant that finds business contacts. "
-                    "Only return factual information you find in your search. "
-                    "Never make up or guess contact details. Return results as JSON."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _build_query(company, domain, target_role, max_contacts),
-            },
-        ],
-        "temperature": 0.1,
-        "max_tokens": 500,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
-            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-        if response.status_code != 200:
-            return None
-        data = response.json()
-        content = (
-            data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        )
-    except Exception:
-        return None
-
-    parsed = _extract_json(content)
+    parsed = extract_json(content)
     if parsed is None:
         return None
 

@@ -19,15 +19,15 @@ tenths of a cent.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-from _openrouter import chat_completion, extract_json  # type: ignore
+from _openrouter import GEMINI_MODEL as MODEL, chat_completion, extract_json  # type: ignore
 
 
-MODEL = "google/gemini-2.0-flash-001"
 SCRAPE_TIMEOUT_S = 15.0
 MAX_PAGES = 4
 USER_AGENT = (
@@ -67,15 +67,23 @@ async def scrape_website_page(url: str) -> Optional[str]:
 
 
 async def scrape_company_pages(domain: str) -> Dict[str, str]:
-    """Return {page_name: html} for up to MAX_PAGES non-empty pages."""
+    """
+    Return {page_name: html} for up to MAX_PAGES non-empty pages.
+
+    All candidate pages are fetched concurrently — the old serial loop could
+    burn 8 × 15s of sequential timeouts on a dead or slow site. We still keep
+    only the first MAX_PAGES successes in PAGES_TO_TRY order.
+    """
     if not domain.startswith("http"):
         domain = f"https://{domain}"
     domain = domain.rstrip("/")
+    fetched = await asyncio.gather(
+        *(scrape_website_page(f"{domain}{path}") for _, path in PAGES_TO_TRY)
+    )
     results: Dict[str, str] = {}
-    for page_name, path in PAGES_TO_TRY:
+    for (page_name, _), html in zip(PAGES_TO_TRY, fetched):
         if len(results) >= MAX_PAGES:
             break
-        html = await scrape_website_page(f"{domain}{path}")
         if html and len(html) > 500:
             results[page_name] = html
     return results

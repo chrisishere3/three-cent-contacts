@@ -30,13 +30,13 @@ Cost is **cumulative across every stage a row fires**. `stage_hit` in the output
 
 ## Pre-run estimate
 
-When the user provides a batch, estimate the **ceiling** (worst case) by assuming every row hits stage 7:
+When the user provides a batch, estimate the **ceiling** (worst case) by assuming every row fires every stage plus a couple of Bouncer checks — this matches `CEILING_COST_PER_ROW` in the script:
 
 ```
-ceiling = rows × $0.04
+ceiling = rows × $0.06
 ```
 
-Show that to the user before running batches ≥ 50 rows. Actual will almost always come in 30-50% lower than the ceiling.
+Show that to the user before running batches ≥ 50 rows. Actual will almost always come in 50-70% lower than the ceiling.
 
 ## Mid-batch cost guard
 
